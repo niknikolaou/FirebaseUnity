@@ -9,8 +9,9 @@
 /[Bb]uilds/
 /[Ll]ogs/
 /[Mm]emoryCaptures/
-/[Pp]lugins/
-/[Ss]treamingAssets/
+/[Aa]ssets/Plugins/
+/[Aa]ssets/StreamingAssets/
+/[Aa]ssets/Firebase/
 
 # Asset meta data should only be ignored when the corresponding asset is also ignored
 !/[Aa]ssets/**/*.meta
