@@ -1,8 +1,13 @@
-﻿/*using System.Collections;
+﻿using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 using Firebase;
 using Firebase.Auth;
+using Firebase.Firestore;
+using Firebase.Extensions;
+using System.Collections.Generic;
+
+
 
 public class FirebaseAuthManager : MonoBehaviour
 {
@@ -26,22 +31,33 @@ public class FirebaseAuthManager : MonoBehaviour
     public InputField passwordRegisterField;
     public InputField confirmPasswordRegisterField;
 
-    private void Awake()
-    {
-        // Check that all of the necessary dependencies for firebase are present on the system
-        FirebaseApp.CheckAndFixDependenciesAsync().ContinueWith(task =>
-        {
-            dependencyStatus = task.Result;
+    // Firestore Variables
+    [Space]
+    [Header("Database")]
+    public InputField scoreField;
 
-            if (dependencyStatus == DependencyStatus.Available)
-            {
-                InitializeFirebase();
-            }
-            else
-            {
-                Debug.LogError("Could not resolve all firebase dependencies: " + dependencyStatus);
-            }
-        });
+    private void Start()
+    {
+        StartCoroutine(CheckAndFixDependenciesAsync());
+    }
+
+    private IEnumerator CheckAndFixDependenciesAsync()
+    {
+        var depentancyTask = FirebaseApp.CheckAndFixDependenciesAsync();
+        yield return new WaitUntil(() => depentancyTask.IsCompleted);
+
+        dependencyStatus = depentancyTask.Result;
+
+        if (dependencyStatus == DependencyStatus.Available)
+        {
+            InitializeFirebase();
+            yield return new WaitForEndOfFrame();
+            StartCoroutine(CheckForAutoLogin());
+        }
+        else
+        {
+            Debug.LogError("Could not resolve all firebase dependencies: " + dependencyStatus);
+        }
     }
 
     void InitializeFirebase()
@@ -51,6 +67,40 @@ public class FirebaseAuthManager : MonoBehaviour
 
         auth.StateChanged += AuthStateChanged;
         AuthStateChanged(this, null);
+    }
+
+    private IEnumerator CheckForAutoLogin()
+    {
+        if (user != null)
+        {
+            var reloadUserTask = user.ReloadAsync();
+            yield return new WaitUntil(() => reloadUserTask.IsCompleted);
+            AutoLogin();
+        }
+        else
+        {
+            UIManager.Instance.OpenLoginPanel();
+        }
+    }
+
+    private void AutoLogin()
+    {
+        if (user != null)
+        {
+            if (user.IsEmailVerified)
+            {
+                References.userName = user.DisplayName;
+                UIManager.Instance.OpenGamePanel();
+            }
+            else
+            {
+                SendEmailForVerification();
+            }
+        }
+        else
+        {
+            UIManager.Instance.OpenLoginPanel();
+        }
     }
 
     // Track state changes of the auth object.
@@ -63,6 +113,8 @@ public class FirebaseAuthManager : MonoBehaviour
             if (!signedIn && user != null)
             {
                 Debug.Log("Signed out " + user.UserId);
+                UIManager.Instance.OpenLoginPanel();
+                ClearLoginInputFieldText();
             }
 
             user = auth.CurrentUser;
@@ -71,6 +123,20 @@ public class FirebaseAuthManager : MonoBehaviour
             {
                 Debug.Log("Signed in " + user.UserId);
             }
+        }
+    }
+
+    private void ClearLoginInputFieldText()
+    {
+        emailLoginField.text = "";
+        passwordLoginField.text = "";
+    }
+
+    public void LogOut()
+    {
+        if (auth != null && user != null)
+        {
+            auth.SignOut();
         }
     }
 
@@ -121,9 +187,15 @@ public class FirebaseAuthManager : MonoBehaviour
             user = loginTask.Result;
 
             Debug.LogFormat("{0} You Are Successfully Logged In", user.DisplayName);
-
-            References.userName = user.DisplayName;
-            UnityEngine.SceneManagement.SceneManager.LoadScene("GameScene");
+            if (user.IsEmailVerified)
+            {
+                References.userName = user.DisplayName;
+                UIManager.Instance.OpenGamePanel();
+            }
+            else
+            {
+                SendEmailForVerification();
+            }
         }
     }
 
@@ -228,10 +300,143 @@ public class FirebaseAuthManager : MonoBehaviour
                 else
                 {
                     Debug.Log("Registration Sucessful Welcome " + user.DisplayName);
-                    UIManager.Instance.OpenLoginPanel();
+                    if (user.IsEmailVerified)
+                    {
+                        UIManager.Instance.OpenLoginPanel();
+                    }
+                    else
+                    {
+                        SendEmailForVerification();
+                    }
                 }
             }
         }
     }
+
+    public void SendEmailForVerification()
+    {
+        StartCoroutine(SendEmailForVerificationAsync());
+    }
+
+    private IEnumerator SendEmailForVerificationAsync()
+    {
+        if (user != null)
+        {
+            var  sendEmailTask = user.SendEmailVerificationAsync();
+            yield return new WaitUntil(()=> sendEmailTask.IsCompleted);
+            if (sendEmailTask.Exception != null)
+            {
+                FirebaseException firebaseException = sendEmailTask.Exception.GetBaseException() as FirebaseException;
+                AuthError error = (AuthError)firebaseException.ErrorCode;
+
+                string errorMessage = "Unknow Error : Please try again later";
+
+                switch (error)
+                {
+                    case AuthError.Cancelled:
+                        errorMessage = "Email Verification Was Cancel";
+                        break;
+                    case AuthError.TooManyRequests:
+                        errorMessage = "Too many Requests";
+                        break;
+                    case AuthError.InvalidRecipientEmail:
+                        errorMessage = "The Email you enter is invalid";
+                        break;
+                }
+                UIManager.Instance.ShowVerificationResponce(false,user.Email,errorMessage);
+            }
+            else
+            {
+                Debug.Log("Email send successfully send");
+                UIManager.Instance.ShowVerificationResponce(true, user.Email, null);
+                
+            }
+        }
+    }
+
+    public void OpenGameScene()
+    {
+        UnityEngine.SceneManagement.SceneManager.LoadScene("GameScene");
+    }
+
+    // Firestore Database functions
+
+    public void AddScore()
+    {
+        StartCoroutine(AddScoreToFirestoreAsync(int.Parse(scoreField.text)));
+    }
+
+    public void GetScore()
+    {
+        StartCoroutine(GetScoreFromFirestoreAsync());
+    }
+
+    private IEnumerator AddScoreToFirestoreAsync(int score)
+    {
+        if (user == null)
+        {
+            Debug.LogError("User is not logged in");
+            yield break;
+        }
+
+        FirebaseFirestore db = FirebaseFirestore.DefaultInstance;
+        DocumentReference docRef = db.Collection("diamondHands").Document(user.UserId);
+
+        Dictionary<string, object> data = new Dictionary<string, object>
+    {
+        { "score", score }
+    };
+
+        var task = docRef.SetAsync(data, SetOptions.MergeAll);
+
+        // Wait until the task is completed
+        yield return new WaitUntil(() => task.IsCompleted);
+
+        if (task.IsCanceled || task.IsFaulted)
+        {
+            Debug.LogError("Failed to add score to Firestore");
+            yield break;
+        }
+
+        Debug.Log("Score added to Firestore");
+    }
+
+    private IEnumerator GetScoreFromFirestoreAsync()
+    {
+        if (user == null)
+        {
+            Debug.LogError("User is not logged in");
+            yield break;
+        }
+
+        FirebaseFirestore db = FirebaseFirestore.DefaultInstance;
+        DocumentReference docRef = db.Collection("diamondHands").Document(user.UserId);
+
+        var task = docRef.GetSnapshotAsync();
+        // Wait until the task is completed
+        yield return new WaitUntil(() => task.IsCompleted);
+
+        if (task.IsCanceled || task.IsFaulted)
+        {
+            Debug.LogError("Failed to get score from Firestore");
+            yield break;
+        }
+
+        DocumentSnapshot snapshot = task.Result;
+
+        if (snapshot.Exists)
+        {
+
+            Dictionary<string, object> data = snapshot.ToDictionary();
+            object score = data["score"];
+            Debug.Log($"Score retrieved from Firestore: {score}");
+        }
+        else
+        {
+            Debug.Log("No score data found in Firestore");
+        }
+    }
+
+
+
 }
-*/

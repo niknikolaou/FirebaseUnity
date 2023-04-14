@@ -1,4 +1,5 @@
 ﻿using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 public class GameManager : MonoBehaviour
@@ -15,5 +16,10 @@ public class GameManager : MonoBehaviour
     private void ShowMessage()
     {
         messageText.text = string.Format("Welcome, {0} In our game scene", References.userName);
+    }
+
+    public void GoToMenu()
+    {
+        SceneManager.LoadScene("FirebaseLogin");
     }
 }
